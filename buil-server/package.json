@@ -1,0 +1,56 @@
+{
+  
+  "name": "buil-server",
+  
+  "version": "1.0.0",
+  
+  "description": "",
+  
+  "main": "script.js",
+  
+  "scripts": {
+  
+    
+  "test": "echo \"Error: no test specified\" && exit 1"
+  
+  },
+  
+  "keywords": [],
+  
+  "author": "",
+  
+  "license": "ISC",
+  
+  "type": "commonjs",
+  
+  "dependencies": {
+  
+    
+  "@aws-sdk/client-s3": "^3.917.0",
+  
+    
+  "child_process": "^1.0.2",
+  
+    
+  "child-process": "^1.0.2",
+  
+    
+  "dotenv": "^17.2.3",
+  
+    
+  "fs": "^0.0.1-security",
+  
+    
+  "kafkajs": "^2.2.4",
+  
+    
+  "mime-type": "^5.0.3",
+  
+    
+  "mime-types": "^3.0.1",
+  
+    
+  "path": "^0.12.7"
+  
+  }
+}
