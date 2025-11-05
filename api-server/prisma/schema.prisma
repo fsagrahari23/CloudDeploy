@@ -24,13 +24,16 @@ enum DeploymentStatus {
 
 model Project {
   id           String       @id @default(uuid())
-  name         String
+  name         String       @unique
   gitUrl       String       @map("git_url")
   subDomain    String       @map("sub_domain")
   customDomain String?      @map("custom_domain")
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
   Deployment   Deployment[]
+  // Optional user owner
+  userId       String?      @map("user_id")
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
 }
 
 model Deployment {
@@ -44,4 +47,15 @@ model Deployment {
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId], name: "idx_project_id")
+}
+
+model User {
+  id        String    @id @default(uuid())
+  email     String    @unique
+  name      String?
+  image     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  projects  Project[]
 }

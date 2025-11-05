@@ -120,3 +120,76 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ====== Custom animations & reveal utilities ====== */
+@keyframes float-slow {
+  0% { transform: translateY(0) translateX(0) scale(1); }
+  25% { transform: translateY(-8px) translateX(6px) scale(1.02); }
+  50% { transform: translateY(4px) translateX(-4px) scale(0.99); }
+  75% { transform: translateY(-6px) translateX(2px) scale(1.01); }
+  100% { transform: translateY(0) translateX(0) scale(1); }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: .7; }
+  50% { opacity: 1; }
+}
+
+@keyframes blob {
+  0% { transform: translate(0px, 0px) scale(1); }
+  33% { transform: translate(30px, -50px) scale(1.1); }
+  66% { transform: translate(-20px, 20px) scale(0.9); }
+  100% { transform: translate(0px, 0px) scale(1); }
+}
+
+.animate-float-slow { animation: float-slow 12s ease-in-out infinite; }
+.animate-pulse-soft { animation: pulse-soft 6s ease-in-out infinite; }
+.animate-blob { animation: blob 7s infinite; }
+
+.animation-delay-2000 { animation-delay: 2s; }
+.animation-delay-4000 { animation-delay: 4s; }
+
+/* Scroll reveal utility */
+.reveal { opacity: 0; transform: translateY(12px); transition: opacity .6s ease, transform .6s ease; transition-delay: var(--delay, 0s); }
+.reveal.is-visible { opacity: 1; transform: translateY(0); }
+
+/* ====== Custom Scrollbar Styles ====== */
+/* Webkit browsers (Chrome, Safari, Edge) */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 100px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: oklch(0.708 0 0 / 0.3);
+  border-radius: 100px;
+  transition: background 0.2s ease;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.708 0 0 / 0.5);
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: oklch(1 0 0 / 0.15);
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: oklch(1 0 0 / 0.25);
+}
+
+/* Firefox */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: oklch(0.708 0 0 / 0.3) transparent;
+}
+
+.dark .custom-scrollbar {
+  scrollbar-color: oklch(1 0 0 / 0.15) transparent;
+}
+

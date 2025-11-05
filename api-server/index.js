@@ -109,28 +109,125 @@ app.post('/project', async (req, res) => {
     }
     const { name, gitUrl } = savePraseResult.data;
 
-    const project = await prisma.project.create({
-        data: {
-            name,
-            gitUrl,
-            subDomain: generateSlug()
+    const userEmail = (req.header('x-user-email') || '').trim();
+    let connectUser = undefined;
+    if (userEmail) {
+        try {
+            const user = await prisma.user.upsert({
+                where: { email: userEmail },
+                create: { email: userEmail },
+                update: {},
+            });
+            connectUser = { connect: { id: user.id } };
+        } catch (e) {
+            console.warn('Failed to upsert user for email', userEmail, e);
         }
-    });
+    }
 
-    return res.status(201).json({ data: project });
+    try {
+        const project = await prisma.project.create({
+            data: {
+                name,
+                gitUrl,
+                subDomain: generateSlug(),
+                ...(connectUser ? { user: connectUser } : {})
+            }
+        });
+
+        return res.status(201).json({ data: project });
+    } catch (e) {
+        if (e.code === 'P2002' && e.meta?.target?.includes('name')) {
+            return res.status(400).json({ error: 'Project name already exists. Please choose a different name.' });
+        }
+        console.error('Error creating project:', e);
+        return res.status(500).json({ error: 'Failed to create project' });
+    }
 })
+
+// List projects (no user filter yet; future: attach user and filter by user)
+app.get('/projects', async (req, res) => {
+    try {
+        const userEmail = (req.header('x-user-email') || '').trim();
+        let where = undefined;
+        if (userEmail) {
+            const user = await prisma.user.findUnique({ where: { email: userEmail } });
+            if (!user) return res.json({ data: [] });
+            where = { userId: user.id };
+        }
+        const projects = await prisma.project.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            include: {
+                Deployment: {
+                    orderBy: { createdAt: 'desc' },
+                }
+            }
+        });
+        res.json({ data: projects });
+    } catch (e) {
+        console.error('Error fetching projects', e);
+        res.status(500).json({ error: 'Failed to fetch projects' });
+    }
+});
+
+// Project detail
+app.get('/project/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userEmail = (req.header('x-user-email') || '').trim();
+        let project = await prisma.project.findUnique({
+            where: { id },
+            include: {
+                Deployment: {
+                    orderBy: { createdAt: 'desc' },
+                }
+            }
+        });
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+        if (userEmail) {
+            const user = await prisma.user.findUnique({ where: { email: userEmail } });
+            if (!user) return res.status(404).json({ error: 'Project not found' });
+            // Backfill ownership for legacy projects with no userId
+            if (!project.userId) {
+                try {
+                    project = await prisma.project.update({
+                        where: { id: project.id },
+                        data: { user: { connect: { id: user.id } } },
+                        include: { Deployment: { orderBy: { createdAt: 'desc' } } }
+                    });
+                } catch (e) {
+                    console.warn('Failed to backfill project owner', e);
+                }
+            }
+            if (project.userId !== user.id) {
+                return res.status(404).json({ error: 'Project not found' });
+            }
+        }
+        res.json({ data: project });
+    } catch (e) {
+        console.error('Error fetching project', e);
+        res.status(500).json({ error: 'Failed to fetch project' });
+    }
+});
 
 
 
 app.post('/deploy', async (req, res) => {
     const { projectId } = req.body; // you forgot this!
 
+    const userEmail = (req.header('x-user-email') || '').trim();
     const project = await prisma.project.findUnique({
         where: { id: projectId }
     });
 
     if (!project) {
         return res.status(404).json({ error: 'Project not found' });
+    }
+    if (userEmail) {
+        const user = await prisma.user.findUnique({ where: { email: userEmail } });
+        if (!user || project.userId !== user.id) {
+            return res.status(403).json({ error: 'Forbidden' });
+        }
     }
     // check if there is not running deployment for the same project
     const deployment = await prisma.deployment.findFirst({
@@ -196,6 +293,13 @@ app.post('/deploy', async (req, res) => {
         const data = await ecsClient.send(command);
         console.log('ECS Task started successfully:', data);
 
+        // Update deployment status to IN_PROGRESS since ECS task started
+        const updatedDeployment = await prisma.deployment.update({
+            where: { id: createdDeployment.id },
+            data: { status: 'IN_PROGRESS' }
+        });
+        console.log(`Deployment ${createdDeployment.id} status updated to IN_PROGRESS:`, updatedDeployment);
+
         res.status(200).json({
             status: 'queued',
             data: {deploymentId: createdDeployment.id}
@@ -203,6 +307,22 @@ app.post('/deploy', async (req, res) => {
 
     } catch (error) {
         console.error('Error starting ECS Task:', error);
+        
+        // Update deployment status to FAILED if ECS task failed to start
+        try {
+            const failedDeployment = await prisma.deployment.update({
+                where: { id: createdDeployment.id },
+                data: { status: 'FAILED' }
+            });
+            console.log(`Deployment ${createdDeployment.id} status updated to FAILED:`, failedDeployment);
+        } catch (updateError) {
+            console.error('Error updating deployment status to FAILED:', updateError);
+        }
+        await prisma.deployment.update({
+            where: { id: createdDeployment.id },
+            data: { status: 'FAILED' }
+        });
+        
         res.status(500).json({ error: 'Failed to start build' });
     }
 });
@@ -234,6 +354,79 @@ app.get('/get-logs/:deploymentId', async (req, res) => {
   }
 });
 
+// Update deployment status endpoint
+app.patch('/deployment/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    
+    const validStatuses = ['NOT_STARTED', 'QUEUED', 'IN_PROGRESS', 'READY', 'FAILED'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    const deployment = await prisma.deployment.update({
+      where: { id },
+      data: { status },
+    });
+
+    console.log(`Manual status update: Deployment ${id} updated to ${status}`);
+    res.json({ data: deployment });
+  } catch (error) {
+    console.error("Error updating deployment status:", error);
+    res.status(500).json({ error: "Failed to update deployment status" });
+  }
+});
+
+// Test endpoint to check deployment status
+app.get('/deployment/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const deployment = await prisma.deployment.findUnique({
+      where: { id }
+    });
+    
+    if (!deployment) {
+      return res.status(404).json({ error: 'Deployment not found' });
+    }
+    
+    res.json({ data: deployment });
+  } catch (error) {
+    console.error("Error fetching deployment:", error);
+    res.status(500).json({ error: "Failed to fetch deployment" });
+  }
+});
+
+// Cleanup stale deployments (deployments that are stuck in QUEUED or IN_PROGRESS for too long)
+async function cleanupStaleDeployments() {
+  try {
+    const staleThreshold = new Date(Date.now() - 30 * 60 * 1000); // 30 minutes ago
+    
+    const staleDeployments = await prisma.deployment.updateMany({
+      where: {
+        status: {
+          in: ['QUEUED', 'IN_PROGRESS']
+        },
+        createdAt: {
+          lt: staleThreshold
+        }
+      },
+      data: {
+        status: 'FAILED'
+      }
+    });
+
+    if (staleDeployments.count > 0) {
+      console.log(`Cleaned up ${staleDeployments.count} stale deployments`);
+    }
+  } catch (error) {
+    console.error('Error cleaning up stale deployments:', error);
+  }
+}
+
+// Run cleanup every 10 minutes
+setInterval(cleanupStaleDeployments, 10 * 60 * 1000);
+
 // // spin the container 
 // function initRedisSubscriber() {
 //     subscriber.psubscribe(`logs:*`, (err, count) => {
@@ -253,36 +446,93 @@ app.get('/get-logs/:deploymentId', async (req, res) => {
 // initRedisSubscriber();
 
 async function initKafkaConsumer() {
-    await consumer.connect();
-    await consumer.subscribe({ topic: process.env.KAFKA_TOPIC, fromBeginning: true });
-    await consumer.run({
-        autoCommit: false,
-        eachBatch: async function ({ batch, heartbeat, commitOffsetsIfNecessary, resolveOffset }) {
-            const messages = batch.messages;
-            console.log(`Received ${messages.length} messages in batch from topic ${batch.topic}`);
-            for (let message of messages) {
-                const messageValue = message.value.toString();
-                const { PROJECT_ID, DEPLOYMENT_ID, log ,metadata} = JSON.parse(messageValue);
-                const { query_id } = await client.insert({
-                    table: 'log_events',
-                    values: [{
-                        event_id: uuidV4(),
-                        deployment_id: DEPLOYMENT_ID,
-                        log,
-                        metadata:{PROJECT_ID, DEPLOYMENT_ID, ...metadata}
-                    }],
-                    format: 'JSONEachRow'
+    try {
+        await consumer.connect();
+        console.log('Kafka consumer connected successfully');
+        
+        await consumer.subscribe({ topic: process.env.KAFKA_TOPIC, fromBeginning: true });
+        console.log(`Subscribed to Kafka topic: ${process.env.KAFKA_TOPIC}`);
+        
+        await consumer.run({
+            autoCommit: false,
+            eachBatch: async function ({ batch, heartbeat, commitOffsetsIfNecessary, resolveOffset }) {
+                const messages = batch.messages;
+                console.log(`Received ${messages.length} messages in batch from topic ${batch.topic}`);
+                for (let message of messages) {
+                    const messageValue = message.value.toString();
+                    console.log('Processing Kafka message:', messageValue);
+                    
+                    try {
+                        const { PROJECT_ID, DEPLOYMENT_ID, log, metadata = {} } = JSON.parse(messageValue);
+                        
+                        // Insert log into ClickHouse
+                        const { query_id } = await client.insert({
+                            table: 'log_events',
+                            values: [{
+                                event_id: uuidV4(),
+                                deployment_id: DEPLOYMENT_ID,
+                                log,
+                                metadata:{PROJECT_ID, DEPLOYMENT_ID, ...metadata}
+                            }],
+                            format: 'JSONEachRow'
+                        });
 
-                })
+                        // Check for deployment start
+                        if (log && log.includes("Build started......")) {
+                            try {
+                                const startedDeployment = await prisma.deployment.update({
+                                    where: { id: DEPLOYMENT_ID },
+                                    data: { status: 'IN_PROGRESS' }
+                                });
+                                console.log(`🚀 Deployment ${DEPLOYMENT_ID} marked as IN_PROGRESS:`, startedDeployment);
+                            } catch (e) {
+                                console.error('❌ Error updating deployment status to IN_PROGRESS:', e);
+                            }
+                        }
 
-                resolveOffset(message.offset)
-                await commitOffsetsIfNecessary(message.offset)
-                await heartbeat()
+                        // Check for deployment completion and update status
+                        if (log && (
+                            log.includes("All files uploaded successfully. Build process complete.") ||
+                            log.includes("== All files uploaded successfully ==")
+                        )) {
+                            try {
+                                const completedDeployment = await prisma.deployment.update({
+                                    where: { id: DEPLOYMENT_ID },
+                                    data: { status: 'READY' }
+                                });
+                                console.log(`🎉 Deployment ${DEPLOYMENT_ID} marked as READY:`, completedDeployment);
+                            } catch (e) {
+                                console.error('❌ Error updating deployment status to READY:', e);
+                            }
+                        }
 
+                        // Check for deployment failure
+                        if (log && (log.includes("Build failed") || log.includes("Error:") || log.includes("FAILED"))) {
+                            try {
+                                const failedDeployment = await prisma.deployment.update({
+                                    where: { id: DEPLOYMENT_ID },
+                                    data: { status: 'FAILED' }
+                                });
+                                console.log(`💥 Deployment ${DEPLOYMENT_ID} marked as FAILED:`, failedDeployment);
+                            } catch (e) {
+                                console.error('❌ Error updating deployment status to FAILED:', e);
+                            }
+                        }
+                        
+                    } catch (parseError) {
+                        console.error('❌ Error parsing Kafka message:', parseError);
+                        console.error('❌ Message value:', messageValue);
+                    }
+
+                    resolveOffset(message.offset)
+                    await commitOffsetsIfNecessary(message.offset)
+                    await heartbeat()
+                }
             }
-
-        }
-    })
+        });
+    } catch (error) {
+        console.error('Error initializing Kafka consumer:', error);
+    }
 }
 
 initKafkaConsumer()

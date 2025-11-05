@@ -43,10 +43,14 @@ async function publishLog(log) {
   await producer.send({
     topic: `container-logs`,
     messages: [
-      { key: 'log', value: JSON.stringify({ PROJECT_ID, DEPLOYMENT_ID, log }) },
+      { key: 'log', value: JSON.stringify({ 
+        PROJECT_ID, 
+        DEPLOYMENT_ID, 
+        log,
+        metadata: { source: 'build-server', timestamp: new Date().toISOString() }
+      }) },
     ],
   });
-
 }
 
 // ---- Recursive walker ----
