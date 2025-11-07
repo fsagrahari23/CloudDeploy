@@ -8,6 +8,7 @@ export const startDeployment = createAsyncThunk(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId }),
+        credentials: "include",
       });
       if (!res.ok) throw new Error(`Deploy start failed: ${res.status}`);
       const data = await res.json();

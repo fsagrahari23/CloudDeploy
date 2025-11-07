@@ -1,6 +1,7 @@
 import NextAuth from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import GitHubProvider from "next-auth/providers/github";
+import { cookies } from "next/headers"; // <-- For setting cookies on server
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,16 +16,17 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     })
   );
 }
+
 if (process.env.GITHUB_ID && process.env.GITHUB_SECRET) {
   providers.push(
     GitHubProvider({
       clientId: process.env.GITHUB_ID,
       clientSecret: process.env.GITHUB_SECRET,
-      authorization: { 
-        params: { 
-          scope: "read:user repo",
-          prompt: "select_account" // Force account selection on every sign-in
-        } 
+      authorization: {
+        params: {
+          scope: "read:user user:email repo",
+          prompt: "select_account",
+        },
       },
     })
   );
@@ -36,27 +38,40 @@ export const authOptions = {
   debug: process.env.NODE_ENV !== "production",
   callbacks: {
     async jwt({ token, account, profile, trigger, session }) {
-      // Handle disconnection by clearing GitHub token
       if (trigger === "update" && session?.disconnectGithub) {
         delete token.githubAccessToken;
         return token;
       }
-      
-      // Preserve GitHub access token when user connects GitHub
+
       if (account?.provider === "github" && account?.access_token) {
         token.githubAccessToken = account.access_token;
       }
-      // Basic user info on first sign in
+
       if (profile && !token.name) {
         token.name = profile.name || token.name;
         token.picture = profile.picture || token.picture;
         token.email = profile.email || token.email;
       }
+
       return token;
     },
+
     async session({ session, token }) {
       session.user = session.user || {};
       session.githubAccessToken = token.githubAccessToken || null;
+
+      // ✅ Set GitHub access token as a secure cookie
+      if (token.githubAccessToken) {
+        const cookieStore = await cookies();
+        cookieStore.set("githubAccessToken", token.githubAccessToken, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "lax",
+          path: "/",
+          maxAge: 60 * 60 * 24, // 1 day
+        });
+      }
+
       return session;
     },
   },

@@ -1,23 +1,25 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
-
+import axios from "axios";
 export const createProject = createAsyncThunk(
   "project/create",
   async ({ name, gitUrl }, { rejectWithValue }) => {
     try {
-      const res = await fetch("/api/project", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, gitUrl }),
-      });
-      if (!res.ok) {
-        const errorData = await res.json();
-        const errorMessage = errorData?.error || `Project create failed: ${res.status}`;
-        throw new Error(errorMessage);
-      }
-      const data = await res.json();
-      return data?.data;
-    } catch (e) {
-      return rejectWithValue(e.message);
+      const res = await axios.post(
+        "/api/project",
+        { name, gitUrl },
+        {
+          headers: { "Content-Type": "application/json" },
+          withCredentials: true, // 👈 important to send cookies
+        }
+      );
+
+      return res.data?.data;
+    } catch (error) {
+      const errorMessage =
+        error.response?.data?.error ||
+        error.message ||
+        "Failed to create project";
+      return rejectWithValue(errorMessage);
     }
   }
 );

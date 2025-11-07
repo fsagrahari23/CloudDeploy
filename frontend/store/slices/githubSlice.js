@@ -3,7 +3,9 @@ import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 // Fetch repos via our Next.js API which uses the user's GitHub token from session
 export const fetchRepos = createAsyncThunk("github/fetchRepos", async (_, { rejectWithValue }) => {
   try {
-    const res = await fetch("/api/github/repos");
+    const res = await fetch("/api/github/repos",{
+       credentials: "include",
+    });
     if (!res.ok) {
       // Handle GitHub not connected case
       if (res.status === 401) {
